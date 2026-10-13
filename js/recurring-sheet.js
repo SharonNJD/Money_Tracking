@@ -3,7 +3,8 @@ import * as store from './store.js';
 import { addDays, applyRecurring, dueRecurring, newId, nextOccurrence, parseAmount, todayISO } from './logic.js';
 import { centsToInput, h, money, ordinal, weekdayDayMonth, weekdayName } from './dom.js';
 import { amountInput, categoryDot, closeSheet, emptyState, fieldRow, openSheet, segmented, select, toast } from './ui.js';
-import { categoryPicker } from './sheets.js';
+import { categoryTypePicker } from './pickers.js';
+import { classify } from './classify.js';
 import { icon } from './icons.js';
 
 export function scheduleText(item) {
@@ -62,12 +63,35 @@ export function openRecurringSheet(item) {
   const state = store.get();
   const cur = state.settings.currency;
   const editing = Boolean(item);
-  let categoryId = item?.categoryId ?? store.activeCategories().find((c) => c.name === 'Home & bills')?.id ?? store.activeCategories()[0]?.id;
+  let pick = { categoryId: item?.categoryId ?? store.activeCategories().find((c) => c.key === 'home')?.id ?? store.activeCategories()[0]?.id, typeId: item?.typeId ?? null };
+  let pickedByHand = Boolean(item);
   let frequency = item?.frequency ?? 'month';
   let day = item?.day ?? Number(todayISO().slice(8));
   let active = item?.active ?? true;
 
-  const name = h('input', { class: 'input', type: 'text', maxlength: 40, placeholder: 'e.g. Netflix', value: item?.name ?? '', 'aria-label': 'Name' });
+  const picker = categoryTypePicker({
+    ...pick,
+    extraCategory: item ? store.category(item.categoryId) : null,
+    onChange: (next) => {
+      pick = next;
+      pickedByHand = true;
+    },
+  });
+  const name = h('input', {
+    class: 'input',
+    type: 'text',
+    maxlength: 40,
+    placeholder: 'e.g. Netflix',
+    value: item?.name ?? '',
+    'aria-label': 'Name',
+    oninput: () => {
+      const auto = !pickedByHand && classify(store.get(), name.value);
+      if (auto) {
+        pick = { categoryId: auto.categoryId, typeId: auto.typeId };
+        picker.setValue(pick);
+      }
+    },
+  });
   const { field: amountField, input: amount } = amountInput({ currency: cur, value: centsToInput(item?.amountCents), label: 'Amount' });
   amountField.classList.add('amount-field-lg');
   const dayHost = h('div');
@@ -116,7 +140,7 @@ export function openRecurringSheet(item) {
       }),
     ),
     dayHost,
-    h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Category'), categoryPicker(categoryId, (id) => (categoryId = id), editing ? store.category(item.categoryId) : null)),
+    h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Category'), picker),
     editing
       ? h(
           'label',
@@ -162,16 +186,18 @@ export function openRecurringSheet(item) {
         return false;
       }
       const today = todayISO();
-      const fields = { name: name.value.trim(), amountCents: cents, categoryId, frequency, day, active };
+      const fields = { name: name.value.trim(), amountCents: cents, categoryId: pick.categoryId, frequency, day, active };
       store.update((s) => {
         if (editing) {
           const r = s.recurring.find((x) => x.id === item.id);
           Object.assign(r, fields);
+          if (pick.typeId) r.typeId = pick.typeId;
+          else delete r.typeId;
           // After an edit or a resume, only dates from today on count; nothing is back-filled.
           const yesterday = addDays(today, -1);
           if (!r.lastAdded || r.lastAdded < yesterday) r.lastAdded = yesterday;
         } else {
-          s.recurring.push({ id: newId(), ...fields, startDate: today, lastAdded: null });
+          s.recurring.push({ id: newId(), ...fields, ...(pick.typeId ? { typeId: pick.typeId } : {}), startDate: today, lastAdded: null });
         }
       });
       if (!runRecurring()) toast(editing ? 'Saved' : `${fields.name} added`);

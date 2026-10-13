@@ -2,7 +2,7 @@ import * as store from '../store.js';
 import { weekEndFor } from '../logic.js';
 import { h, money, weekRange } from '../dom.js';
 import { emptyState, select } from '../ui.js';
-import { openAddChooser } from '../sheets.js';
+import { openAddSheet } from '../add-sheet.js';
 import { icon } from '../icons.js';
 import { expenseRow } from './home.js';
 import { topbar } from './common.js';
@@ -67,7 +67,7 @@ export function renderHistory() {
         emptyState({
           title: filter === 'all' ? 'No spending logged yet' : 'Nothing in this category yet',
           text: 'Entries appear here grouped by week (Saturday to Friday).',
-          action: h('button', { type: 'button', class: 'btn btn-primary', onclick: openAddChooser }, 'Add spending'),
+          action: h('button', { type: 'button', class: 'btn btn-primary', onclick: () => openAddSheet() }, 'Add spending'),
         }),
       );
 

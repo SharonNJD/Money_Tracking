@@ -253,11 +253,11 @@ export function parseApplePayLog(text, dateOrder = 'dmy') {
 // ---------------------------------------------------------------------------
 // Merchants and categories
 
-// For display: collapse spaces and tame ALL-CAPS card descriptors.
+// For display: collapse spaces and tame ALL-CAPS card descriptors ("STARBUCKS STORE" → "Starbucks Store").
+// Short acronyms like KFC or BP stay as they are.
 export function cleanMerchant(raw) {
   const s = String(raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 120);
-  if (/[a-z]/.test(s) || !/[A-Z]{3}/.test(s)) return s || 'Unknown';
-  return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  return s.replace(/\b[A-Z][A-Z']{3,}\b/g, (w) => w[0] + w.slice(1).toLowerCase()) || 'Unknown';
 }
 
 // For matching: "SQ *BLUE BOTTLE #123" → "blue bottle".
@@ -271,48 +271,6 @@ export function merchantKey(raw) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 60);
-}
-
-// Common merchant words → default category names. Matched on word starts, so "restaurant" finds "restaurants".
-const KEYWORDS = {
-  Groceries: ['supermarket', 'grocery', 'groceries', 'walmart', 'tesco', 'sainsbury', 'asda', 'aldi', 'lidl', 'kroger', 'safeway', 'whole foods', 'trader joe', 'costco', 'carrefour', 'rewe', 'edeka', 'shufersal', 'rami levy', 'yochananof', 'osher ad', 'tiv taam', 'שופרסל', 'רמי לוי', 'ויקטורי', 'יוחננוף', 'אושר עד'],
-  'Eating out': ['restaurant', 'cafe', 'café', 'coffee', 'starbucks', 'mcdonald', 'burger', 'pizza', 'kfc', 'subway', 'domino', 'sushi', 'bistro', 'wolt', 'deliveroo', 'doordash', 'uber eats', 'ubereats', 'just eat', 'grubhub', 'aroma', 'cofix', 'ארומה', 'קפה', 'מסעדת', 'מסעדה', 'פיצה', 'וולט'],
-  Transport: ['uber', 'lyft', 'taxi', 'gett', 'bolt', 'fuel', 'petrol', 'shell', 'bp', 'esso', 'chevron', 'exxon', 'texaco', 'parking', 'railway', 'rail', 'metro', 'pango', 'rav kav', 'sonol', 'dor alon', 'פז', 'דלק', 'סונול', 'חניה', 'חניון', 'רכבת', 'מונית', 'פנגו'],
-  'Home & bills': ['electric', 'electricity', 'water', 'internet', 'broadband', 'vodafone', 'verizon', 't mobile', 'comcast', 'partner', 'cellcom', 'pelephone', 'bezeq', 'insurance', 'arnona', 'rent', 'חשמל', 'מים', 'ארנונה', 'בזק', 'סלקום', 'פרטנר', 'פלאפון', 'ביטוח'],
-  Shopping: ['amazon', 'ebay', 'aliexpress', 'shein', 'zara', 'h m', 'uniqlo', 'ikea', 'target', 'best buy', 'primark', 'decathlon', 'castro', 'ksp', 'איקאה', 'קסטרו', 'זארה'],
-  Fun: ['netflix', 'spotify', 'disney', 'hbo', 'youtube', 'cinema', 'movie', 'theatre', 'theater', 'steam', 'playstation', 'xbox', 'nintendo', 'ticketmaster', 'concert', 'yes planet', 'סינמה', 'נטפליקס', 'ספוטיפיי'],
-  Health: ['pharmacy', 'chemist', 'cvs', 'walgreens', 'boots', 'super pharm', 'superpharm', 'be pharm', 'clinic', 'doctor', 'dental', 'dentist', 'hospital', 'optic', 'gym', 'fitness', 'סופר פארם', 'בית מרקחת', 'מרפאה'],
-};
-
-function keywordCategoryName(key) {
-  const padded = ` ${key}`;
-  for (const [name, words] of Object.entries(KEYWORDS)) {
-    for (const word of words) {
-      // Short words must match whole words ("bp" shouldn't match "bpm").
-      if (word.length <= 3 ? ` ${key} `.includes(` ${word} `) : padded.includes(` ${word}`)) return name;
-    }
-  }
-  return null;
-}
-
-// Longest remembered pattern contained in the merchant wins.
-export function matchRule(rules, key) {
-  let best = null;
-  for (const r of rules) {
-    if (key.includes(r.pattern) && (!best || r.pattern.length > best.pattern.length)) best = r;
-  }
-  return best;
-}
-
-// → { categoryId, from: 'rule' | 'keyword' } or null.
-export function suggestCategory(state, merchant) {
-  const key = merchantKey(merchant);
-  const active = state.categories.filter((c) => !c.archived);
-  const rule = matchRule(state.rules ?? [], key);
-  if (rule && active.some((c) => c.id === rule.categoryId)) return { categoryId: rule.categoryId, from: 'rule' };
-  const name = keywordCategoryName(key);
-  const byName = name && active.find((c) => c.name.toLowerCase() === name.toLowerCase());
-  return byName ? { categoryId: byName.id, from: 'keyword' } : null;
 }
 
 // Stable keys so importing the same purchases twice is caught. Identical purchases on one day get #1, #2…

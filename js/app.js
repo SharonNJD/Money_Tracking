@@ -2,7 +2,8 @@ import * as store from './store.js';
 import { guessCurrency, h } from './dom.js';
 import { icon } from './icons.js';
 import { currentRoute, navigate } from './router.js';
-import { openAddChooser, openOnboarding } from './sheets.js';
+import { openOnboarding } from './sheets.js';
+import { openAddSheet } from './add-sheet.js';
 import { runRecurring } from './recurring-sheet.js';
 import { toast } from './ui.js';
 import { renderHome } from './views/home.js';
@@ -28,7 +29,7 @@ function tabbar(route) {
     { class: 'tabbar', 'aria-label': 'Main' },
     TABS.map((tab) =>
       tab.id === 'add'
-        ? h('button', { type: 'button', class: 'tab-add', 'aria-label': 'Add spending', onclick: openAddChooser }, icon('plus', 28))
+        ? h('button', { type: 'button', class: 'tab-add', 'aria-label': 'Add spending', onclick: () => openAddSheet() }, icon('plus', 28))
         : h(
             'a',
             { class: 'tab', href: `#/${tab.id}`, 'aria-current': tab.id === route ? 'page' : null, onclick: (e) => { e.preventDefault(); navigate(tab.id); } },

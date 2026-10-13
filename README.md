@@ -6,6 +6,10 @@ It's a web app you add to your iPhone's Home Screen: it opens full-screen like a
 
 ## What it does
 
+- **Just type it.** Tap **Add spending** and write what you spent, like `coffee 18`, `uber 32 yesterday`, or several at once: `pizza 45, cinema 70`. Each item is sorted into a category and a specific type automatically (Coffee, Delivery, Fuel, Rent, Subscriptions…), in English or Hebrew.
+- **Paste or scan instead of typing.** Copy a bank or card text message and tap **Paste**. Or use iPhone's **Scan Text** to read a receipt or your bank app with the camera. The app finds the amount, the shop and the date.
+- **It learns.** Change a category once and the same shop or word is sorted that way next time. Fixing an entry in History teaches it too.
+- **Specific types.** Every category has types (Eating out → Coffee, Fast food, Restaurants, Delivery, Bars), you can add your own, and Charts shows each category split by type.
 - **Friday check-in.** Enter one amount per category for the week (Saturday to Friday). You can also add single purchases any time.
 - **Friday reminder.** One tap adds a repeating Friday event to your iPhone Calendar, so you get an alert even when the app is closed. The Home screen also shows a check-in card on Fridays, and keeps reminding you about any week you missed.
 - **Categories.** Groceries, Eating out, Transport, Home & bills, Shopping, Fun, Health and Other to start with. You can rename them, change the emoji and color, add your own, or hide them.
@@ -29,9 +33,17 @@ It's a web app you add to your iPhone's Home Screen: it opens full-screen like a
 
 > Use the Home Screen app, not the Safari tab. iOS keeps their data separate, so anything you enter in Safari won't show up in the installed app.
 
-## Log Apple Pay purchases automatically
+## Bring in bank purchases without typing
 
-Apple doesn't let apps read your Apple Pay history directly, but the Shortcuts app can write each purchase to a file:
+Apple doesn't let apps read your Apple Pay or bank history, and connecting straight to a bank needs a licensed company and a server holding your bank login, which this app deliberately avoids. These work instead, all on your phone:
+
+- **Bank text messages:** long-press a message from your bank or card company → **Copy** → in the app tap **+** → **Paste**. Paste several at once if you like.
+- **Your bank app or a receipt:** tap the box in **Add spending**, then **Scan Text** (camera icon above the keyboard) and point at the screen or receipt. For a screenshot, open it in Photos, long-press the text → **Select All** → **Copy**, then **Paste**.
+- **Statements:** download a CSV from your bank's website and use **Import a file**.
+
+### Optional: log Apple Pay automatically
+
+If your iPhone's Shortcuts app has a **Transaction** automation (it needs iOS 17 or later and a card in Apple Wallet, and isn't offered everywhere), it can write each Apple Pay purchase to a file:
 
 1. **Shortcuts** app → **Automation** → **+** → **Transaction**. Pick your cards, choose **Run Immediately**, then **New Blank Automation**.
 2. Add **Append to Text File**. In its text type `MT|`, then insert **Current Date** (Date Format: ISO 8601), `|`, **Merchant**, `|`, **Amount**.
@@ -70,7 +82,7 @@ To turn it on:
 ## Development
 
 ```sh
-npm test        # unit tests: dates, budgets, check-ins, recurring, goals, insights, statement import
+npm test        # unit tests: dates, budgets, check-ins, recurring, goals, insights, import, auto-sort, text parsing
 npm start       # serve locally at http://localhost:8080
 ```
 
@@ -78,7 +90,10 @@ npm start       # serve locally at http://localhost:8080
 | --- | --- |
 | `index.html`, `manifest.webmanifest`, `sw.js` | App shell, install metadata, offline cache |
 | `js/logic.js` | Pure logic: weeks (Sat to Fri), money parsing, totals, budget levels, check-ins, streaks, recurring payments, goals, backup validation, CSV |
-| `js/importer.js` | Statement/Apple Pay log parsing, column detection, shop → category suggestions, duplicate keys |
+| `js/importer.js` | Statement/Apple Pay log parsing, column detection, duplicate keys |
+| `js/freetext.js` | Understands typed notes, bank text messages, receipts and screenshot text |
+| `js/classify.js` | Auto-sorting: built-in English/Hebrew dictionary, your own types, learned corrections |
+| `js/add-sheet.js`, `js/pickers.js` | The Add screen, and category/type pickers |
 | `js/insights.js` | Month-end forecast, weekly recap, biggest change |
 | `js/store.js` | State saved to `localStorage` |
 | `js/views/` | Home, History, Charts, Settings screens |

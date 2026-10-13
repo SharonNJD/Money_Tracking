@@ -16,9 +16,11 @@ import {
   weekStartFor,
 } from './logic.js';
 import { centsToInput, currencyOptions, fill, guessCurrency, h, isIOS, isStandalone, LOCALE, money, percent, weekRange, weekdayDayMonth } from './dom.js';
-import { afterSave, amountInput, categoryDot, choice, closeSheet, fieldRow, levelIcon, openSheet, segmented, select, toast } from './ui.js';
+import { afterSave, amountInput, categoryDot, closeSheet, fieldRow, levelIcon, openSheet, segmented, select, toast } from './ui.js';
 import { openImportSheet } from './import-sheet.js';
 import { openRecapSheet } from './recap.js';
+import { categoryTypePicker, itemLabel } from './pickers.js';
+import { classify, learn } from './classify.js';
 import { icon } from './icons.js';
 
 const SOURCE_HINTS = {
@@ -167,39 +169,39 @@ export function openCheckinSheet(initialWeekEnd) {
 // ---------------------------------------------------------------------------
 // Single expense (add or edit)
 
-export function categoryPicker(selectedId, onPick, extra) {
-  const categories = store.activeCategories();
-  if (extra && !categories.includes(extra)) categories.push(extra);
-  const buttons = categories.map((c) =>
-    h(
-      'button',
-      {
-        type: 'button',
-        class: 'chip',
-        role: 'radio',
-        'aria-checked': String(c.id === selectedId),
-        style: { '--cat': `var(--c${c.color})` },
-        onclick: () => {
-          for (const b of buttons) b.setAttribute('aria-checked', String(b.dataset.id === c.id));
-          onPick(c.id);
-        },
-        dataset: { id: c.id },
-      },
-      h('span', { class: 'chip-emoji', 'aria-hidden': 'true' }, c.emoji),
-      h('span', { class: 'chip-label' }, c.name),
-    ),
-  );
-  return h('div', { class: 'chips', role: 'radiogroup', 'aria-label': 'Category' }, buttons);
-}
-
 export function openExpenseSheet({ expense, categoryId } = {}) {
   const cur = currency();
   const editing = Boolean(expense);
-  let catId = expense?.categoryId ?? categoryId ?? store.activeCategories()[0]?.id;
+  let pick = { categoryId: expense?.categoryId ?? categoryId ?? store.activeCategories()[0]?.id, typeId: expense?.typeId ?? null };
+  let pickedByHand = editing;
   const { field, input } = amountInput({ currency: cur, value: centsToInput(expense?.amountCents), label: 'Amount' });
   field.classList.add('amount-field-lg');
   const date = h('input', { class: 'input', type: 'date', value: expense?.date ?? todayISO(), 'aria-label': 'Date' });
-  const note = h('input', { class: 'input', type: 'text', maxlength: 200, placeholder: 'Optional', value: expense?.note ?? '', 'aria-label': 'Note' });
+  const picker = categoryTypePicker({
+    ...pick,
+    extraCategory: editing ? store.category(expense.categoryId) : null,
+    onChange: (next) => {
+      pick = next;
+      pickedByHand = true;
+    },
+  });
+  // Typing what it was ("Netflix") picks the category and type, until you choose one yourself.
+  const note = h('input', {
+    class: 'input',
+    type: 'text',
+    maxlength: 200,
+    placeholder: 'What was it? (optional)',
+    value: expense?.note ?? '',
+    'aria-label': 'Note',
+    oninput: () => {
+      if (pickedByHand) return;
+      const auto = classify(store.get(), note.value);
+      if (auto) {
+        pick = { categoryId: auto.categoryId, typeId: auto.typeId };
+        picker.setValue(pick);
+      }
+    },
+  });
   const error = h('p', { class: 'form-error', role: 'alert' });
 
   const remove = editing
@@ -226,8 +228,8 @@ export function openExpenseSheet({ expense, categoryId } = {}) {
     'div',
     { class: 'stack' },
     field,
-    h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Category'), categoryPicker(catId, (id) => (catId = id), editing ? store.category(expense.categoryId) : null)),
-    h('div', { class: 'card form-card' }, fieldRow('Date', date), fieldRow('Note', note)),
+    h('div', { class: 'card form-card' }, fieldRow('Note', note), fieldRow('Date', date)),
+    h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Category'), picker),
     expense && expense.source !== 'single' ? h('p', { class: 'field-hint' }, SOURCE_HINTS[expense.source]) : null,
     error,
     remove,
@@ -249,32 +251,31 @@ export function openExpenseSheet({ expense, categoryId } = {}) {
         error.textContent = 'Pick a date.';
         return false;
       }
-      if (!catId) {
+      if (!pick.categoryId) {
         error.textContent = 'Pick a category.';
         return false;
       }
       const before = budgetStatuses(store.get(), date.value);
+      const noteText = note.value.trim();
+      const moved = editing && (pick.categoryId !== expense.categoryId || (pick.typeId ?? null) !== (expense.typeId ?? null));
       store.update((s) => {
-        const fields = { categoryId: catId, amountCents: cents, date: date.value, note: note.value.trim() };
-        if (editing) Object.assign(s.expenses.find((e) => e.id === expense.id), fields);
-        else s.expenses.push({ id: newId(), ...fields, source: 'single', createdAt: new Date().toISOString() });
+        const fields = { categoryId: pick.categoryId, amountCents: cents, date: date.value, note: noteText };
+        if (editing) {
+          const e = s.expenses.find((x) => x.id === expense.id);
+          Object.assign(e, fields);
+          if (pick.typeId) e.typeId = pick.typeId;
+          else delete e.typeId;
+        } else {
+          s.expenses.push({ id: newId(), ...fields, source: 'single', createdAt: new Date().toISOString(), ...(pick.typeId ? { typeId: pick.typeId } : {}) });
+        }
+        // Fixing a category teaches auto-sort: next time the same shop or note is sorted this way.
+        const learnFrom = noteText || expense?.merchant;
+        if (learnFrom && (moved || (!editing && pickedByHand))) learn(s, learnFrom, pick.categoryId, pick.typeId);
       });
-      afterSave(escalations(before, budgetStatuses(store.get(), date.value)), editing ? 'Saved' : `Added ${money(cents, cur)}`);
+      afterSave(escalations(before, budgetStatuses(store.get(), date.value)), editing ? 'Saved' : `Added ${money(cents, cur)} · ${itemLabel(pick.categoryId, pick.typeId)}`);
       return true;
     },
   });
-}
-
-// Chooser behind the big + button.
-export function openAddChooser() {
-  const body = h(
-    'div',
-    { class: 'stack' },
-    choice('Weekly check-in', 'Fill in this week’s spending for every category at once.', 'calendar', () => openCheckinSheet()),
-    choice('Single expense', 'Add one purchase with a date and note.', 'wallet', () => openExpenseSheet()),
-    choice('Import purchases', 'From Apple Pay or a bank or card statement.', 'upload', () => openImportSheet()),
-  );
-  openSheet({ title: 'Add spending', body, cancelLabel: 'Close' });
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +330,72 @@ export function openCategorySheet(category) {
   const budget = budgetFields(category?.budget, cur);
   const error = h('p', { class: 'form-error', role: 'alert' });
 
+  // Types (Coffee, Delivery…): edited on a copy and saved with the category.
+  let types = (category?.types ?? []).map((t) => ({ ...t }));
+  const typesHost = h('div');
+  const typeInput = h('input', { class: 'input', type: 'text', maxlength: 40, placeholder: 'e.g. ☕ Coffee', 'aria-label': 'New type', style: { textAlign: 'left' } });
+  const addType = () => {
+    const raw = typeInput.value.trim();
+    if (!raw) return;
+    const m = raw.match(/^(\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*)\s*(.*)$/u);
+    const typeName = (m ? m[2] : raw).trim() || raw;
+    types.push({ id: newId(), name: typeName.slice(0, 40), emoji: m?.[1] ?? (emoji.value.trim() || '•') });
+    typeInput.value = '';
+    renderTypes();
+  };
+  typeInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addType();
+    }
+  });
+  const renderTypes = () => {
+    fill(
+      typesHost,
+      h(
+        'div',
+        { class: 'type-chips' },
+        types.map((t) =>
+          h(
+            'span',
+            { class: 'type-chip is-static' },
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'type-chip-label',
+                'aria-label': `Rename ${t.name}`,
+                onclick: () => {
+                  const next = prompt('Rename type', t.name);
+                  if (next && next.trim()) {
+                    t.name = next.trim().slice(0, 40);
+                    renderTypes();
+                  }
+                },
+              },
+              `${t.emoji} ${t.name}`,
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'type-chip-remove',
+                'aria-label': `Remove ${t.name}`,
+                onclick: () => {
+                  types = types.filter((x) => x !== t);
+                  renderTypes();
+                },
+              },
+              '×',
+            ),
+          ),
+        ),
+        types.length ? null : h('span', { class: 'field-hint' }, 'No types yet.'),
+      ),
+    );
+  };
+  renderTypes();
+
   const count = editing ? state.expenses.filter((e) => e.categoryId === category.id).length + state.recurring.filter((r) => r.categoryId === category.id).length : 0;
   const remove = editing
     ? h(
@@ -366,6 +433,14 @@ export function openCategorySheet(category) {
     emojiRow,
     h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Color'), h('div', { class: 'swatches', role: 'radiogroup', 'aria-label': 'Color' }, swatches)),
     h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Budget'), budget.el, h('p', { class: 'field-hint' }, `You’ll be warned at ${percent(state.settings.warnAt)} and when you go over.`)),
+    h(
+      'div',
+      { class: 'form-section' },
+      h('span', { class: 'field-label' }, 'Types'),
+      typesHost,
+      h('div', { class: 'card form-card type-add' }, typeInput, h('button', { type: 'button', class: 'link-btn', onclick: addType }, icon('plus', 16), 'Add')),
+      h('p', { class: 'field-hint' }, 'More specific kinds of spending in this category. Tap one to rename it. Anything you type with its name is sorted here.'),
+    ),
     error,
     remove,
   );
@@ -385,10 +460,19 @@ export function openCategorySheet(category) {
         error.textContent = result.error;
         return false;
       }
-      const fields = { name: nameValue, emoji: emoji.value.trim() || '🏷️', color, budget: result.budget };
+      if (typeInput.value.trim()) addType();
+      const fields = { name: nameValue, emoji: emoji.value.trim() || '🏷️', color, budget: result.budget, types };
       store.update((s) => {
-        if (editing) Object.assign(s.categories.find((c) => c.id === category.id), fields);
-        else s.categories.push({ id: newId(), ...fields, archived: false });
+        if (editing) {
+          Object.assign(s.categories.find((c) => c.id === category.id), fields);
+          // Entries, rules and recurring payments of a removed type stay in the category without a type.
+          const kept = new Set(types.map((t) => t.id));
+          for (const list of [s.expenses, s.rules, s.recurring]) {
+            for (const x of list) if (x.categoryId === category.id && x.typeId && !kept.has(x.typeId)) delete x.typeId;
+          }
+        } else {
+          s.categories.push({ id: newId(), ...fields, archived: false });
+        }
       });
       toast(editing ? 'Saved' : 'Category added');
       return true;

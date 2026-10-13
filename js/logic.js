@@ -9,16 +9,26 @@ export const DEFAULT_WARN_AT = 0.8;
 export const SOURCES = ['checkin', 'single', 'import', 'recurring'];
 export const SOURCE_LABELS = { checkin: 'Weekly check-in', single: 'Expense', import: 'Imported', recurring: 'Recurring' };
 
+// `key`s stay fixed when you rename things, so auto-sorting keeps working (see classify.js).
 export const DEFAULT_CATEGORIES = [
-  { emoji: '🛒', name: 'Groceries', color: 0 },
-  { emoji: '🍽️', name: 'Eating out', color: 1 },
-  { emoji: '🚗', name: 'Transport', color: 2 },
-  { emoji: '🏠', name: 'Home & bills', color: 3 },
-  { emoji: '🛍️', name: 'Shopping', color: 4 },
-  { emoji: '🎉', name: 'Fun', color: 5 },
-  { emoji: '💊', name: 'Health', color: 7 },
-  { emoji: '📦', name: 'Other', color: 6 },
+  { key: 'groceries', emoji: '🛒', name: 'Groceries', color: 0, types: [['supermarket', '🛒', 'Supermarket'], ['bakery', '🥖', 'Bakery'], ['produce', '🍎', 'Market & produce'], ['drinks', '🍷', 'Drinks & alcohol'], ['convenience', '🏪', 'Convenience store']] },
+  { key: 'eating', emoji: '🍽️', name: 'Eating out', color: 1, types: [['coffee', '☕', 'Coffee'], ['fastfood', '🍔', 'Fast food'], ['restaurant', '🍝', 'Restaurants'], ['delivery', '🛵', 'Delivery'], ['bars', '🍺', 'Bars & drinks']] },
+  { key: 'transport', emoji: '🚗', name: 'Transport', color: 2, types: [['fuel', '⛽', 'Fuel'], ['public', '🚌', 'Public transport'], ['taxi', '🚕', 'Taxi & rides'], ['parking', '🅿️', 'Parking & tolls'], ['car', '🔧', 'Car care']] },
+  { key: 'home', emoji: '🏠', name: 'Home & bills', color: 3, types: [['rent', '🔑', 'Rent & mortgage'], ['utilities', '💡', 'Electricity & water'], ['phone', '📱', 'Phone & internet'], ['insurance', '🛡️', 'Insurance'], ['taxes', '🧾', 'Taxes & fees'], ['supplies', '🧹', 'Supplies & repairs']] },
+  { key: 'shopping', emoji: '🛍️', name: 'Shopping', color: 4, types: [['clothes', '👕', 'Clothes & shoes'], ['electronics', '💻', 'Electronics'], ['homegoods', '🛋️', 'Home & furniture'], ['beauty', '💄', 'Beauty & care'], ['online', '📦', 'Online orders']] },
+  { key: 'fun', emoji: '🎉', name: 'Fun', color: 5, types: [['subscriptions', '📺', 'Subscriptions'], ['movies', '🎬', 'Movies & shows'], ['hobbies', '🎮', 'Games & hobbies'], ['travel', '✈️', 'Travel'], ['events', '🎟️', 'Events & outings']] },
+  { key: 'health', emoji: '💊', name: 'Health', color: 7, types: [['pharmacy', '💊', 'Pharmacy'], ['doctor', '🩺', 'Doctor & dentist'], ['fitness', '🏋️', 'Gym & sport'], ['optics', '👓', 'Glasses & optics']] },
+  { key: 'other', emoji: '📦', name: 'Other', color: 6, types: [['gifts', '🎁', 'Gifts'], ['education', '📚', 'Education'], ['pets', '🐶', 'Pets'], ['kids', '👶', 'Kids'], ['fees', '🏦', 'Bank fees'], ['donations', '❤️', 'Donations']] },
 ];
+
+export function defaultTypes(categoryKey) {
+  const def = DEFAULT_CATEGORIES.find((c) => c.key === categoryKey);
+  return def ? def.types.map(([key, emoji, name]) => ({ id: newId(), key, name, emoji })) : [];
+}
+
+export function newCategory({ key, emoji, name, color }) {
+  return { id: newId(), ...(key ? { key } : {}), name, emoji, color, budget: null, archived: false, types: defaultTypes(key) };
+}
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const pad = (n) => String(n).padStart(2, '0');
@@ -153,6 +163,16 @@ export function totalsByCategory(expenses, { start, end } = {}) {
     if (start && e.date < start) continue;
     if (end && e.date > end) continue;
     totals.set(e.categoryId, (totals.get(e.categoryId) ?? 0) + e.amountCents);
+  }
+  return totals;
+}
+
+export function totalsByType(expenses, { start, end, categoryId }) {
+  const totals = new Map();
+  for (const e of expenses) {
+    if (e.categoryId !== categoryId || (start && e.date < start) || (end && e.date > end)) continue;
+    const key = e.typeId ?? '';
+    totals.set(key, (totals.get(key) ?? 0) + e.amountCents);
   }
   return totals;
 }
@@ -320,6 +340,7 @@ export function applyRecurring(state, todayIso, now = new Date().toISOString()) 
       note: item.name,
       source: 'recurring',
       recurringId: item.id,
+      ...(item.typeId ? { typeId: item.typeId } : {}),
       createdAt: now,
     });
     if (!item.lastAdded || date > item.lastAdded) item.lastAdded = date;
@@ -367,7 +388,7 @@ export function defaultState({ today = todayISO(), currency = 'USD' } = {}) {
       lastBackup: null,
       onboarded: false,
     },
-    categories: DEFAULT_CATEGORIES.map((c) => ({ id: newId(), ...c, budget: null, archived: false })),
+    categories: DEFAULT_CATEGORIES.map(newCategory),
     expenses: [],
     checkins: {},
     rules: [],
@@ -404,15 +425,27 @@ export function normalizeState(raw) {
 
   const categories = raw.categories.map((c, i) => {
     if (!isObject(c) || typeof c.id !== 'string' || !c.id) throw new Error(`Category #${i + 1} is invalid.`);
+    const name = String(c.name ?? '').trim().slice(0, 40) || 'Unnamed';
+    // Data from before types existed: default categories (matched by name) get their default types.
+    const key = typeof c.key === 'string' && c.key ? c.key : Array.isArray(c.types) ? null : DEFAULT_CATEGORIES.find((d) => d.name === name)?.key;
+    const types = Array.isArray(c.types)
+      ? c.types
+          .filter((t) => isObject(t) && typeof t.id === 'string' && t.id && typeof t.name === 'string' && t.name.trim())
+          .map((t) => ({ id: t.id, ...(typeof t.key === 'string' && t.key ? { key: t.key } : {}), name: t.name.trim().slice(0, 40), emoji: typeof t.emoji === 'string' && t.emoji.trim() ? t.emoji.trim().slice(0, 16) : '•' }))
+      : defaultTypes(key);
     return {
       id: c.id,
-      name: String(c.name ?? '').trim().slice(0, 40) || 'Unnamed',
+      ...(key ? { key } : {}),
+      name,
       emoji: typeof c.emoji === 'string' && c.emoji.trim() ? c.emoji.trim().slice(0, 16) : '🏷️',
       color: Number.isInteger(c.color) ? ((c.color % PALETTE_SIZE) + PALETTE_SIZE) % PALETTE_SIZE : i % PALETTE_SIZE,
       budget: normalizeBudget(c.budget),
       archived: Boolean(c.archived),
+      types,
     };
   });
+  const typeIds = new Map(categories.map((c) => [c.id, new Set(c.types.map((t) => t.id))]));
+  const validType = (categoryId, typeId) => typeof typeId === 'string' && typeIds.get(categoryId)?.has(typeId);
 
   const categoryIds = new Set(categories.map((c) => c.id));
   const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -435,6 +468,7 @@ export function normalizeState(raw) {
       ...(e.merchant ? { merchant: text(e.merchant, 120) } : {}),
       ...(e.importKey ? { importKey: text(e.importKey, 300) } : {}),
       ...(e.recurringId ? { recurringId: text(e.recurringId, 80) } : {}),
+      ...(validType(e.categoryId, e.typeId) ? { typeId: e.typeId } : {}),
     };
   });
 
@@ -442,7 +476,12 @@ export function normalizeState(raw) {
   const list = (v) => (Array.isArray(v) ? v.filter(isObject) : []);
   const rules = list(raw.rules)
     .filter((r) => typeof r.pattern === 'string' && r.pattern.trim().length >= 2 && categoryIds.has(r.categoryId))
-    .map((r) => ({ id: typeof r.id === 'string' && r.id ? r.id : newId(), pattern: r.pattern.trim().toLowerCase().slice(0, 80), categoryId: r.categoryId }));
+    .map((r) => ({
+      id: typeof r.id === 'string' && r.id ? r.id : newId(),
+      pattern: r.pattern.trim().toLowerCase().slice(0, 80),
+      categoryId: r.categoryId,
+      ...(validType(r.categoryId, r.typeId) ? { typeId: r.typeId } : {}),
+    }));
 
   const recurring = list(raw.recurring)
     .filter(
@@ -465,6 +504,7 @@ export function normalizeState(raw) {
       startDate: r.startDate,
       lastAdded: isISODate(r.lastAdded) ? r.lastAdded : null,
       active: r.active !== false,
+      ...(validType(r.categoryId, r.typeId) ? { typeId: r.typeId } : {}),
     }));
 
   const goals = list(raw.goals)

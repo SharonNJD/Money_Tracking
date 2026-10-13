@@ -1,5 +1,5 @@
 import * as store from '../store.js';
-import { periodRange, periodSeries, todayISO, totalsByCategory } from '../logic.js';
+import { periodRange, periodSeries, todayISO, totalsByCategory, totalsByType } from '../logic.js';
 import { dayMonth, h, money, monthShort, monthYear, percent, periodWord, weekRange } from '../dom.js';
 import { budgetBadge, emptyState, segmented, select } from '../ui.js';
 import { columnChart, donutChart } from '../charts.js';
@@ -86,6 +86,33 @@ function breakdown(state, range, cur) {
         : null,
     ),
     h('p', { class: 'field-hint' }, 'Tap a category to see its trend.'),
+  );
+}
+
+// One category's spending split by type (Coffee, Delivery…) for the selected period.
+function typeBreakdown(state, category, range, cur) {
+  const totals = [...totalsByType(state.expenses, { ...range, categoryId: category.id })].filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1]);
+  const sum = totals.reduce((s, [, c]) => s + c, 0);
+  if (!sum || (totals.length === 1 && totals[0][0] === '')) return null;
+  const max = totals[0][1];
+  return h(
+    'div',
+    { class: 'card chart-card' },
+    h('h2', { class: 'card-title' }, 'By type'),
+    h(
+      'div',
+      { class: 'type-bars', role: 'list' },
+      totals.map(([typeId, cents]) => {
+        const t = category.types.find((x) => x.id === typeId);
+        return h(
+          'div',
+          { class: 'type-bar-row', role: 'listitem' },
+          h('span', { class: 'type-bar-label' }, t ? `${t.emoji} ${t.name}` : 'General'),
+          h('span', { class: 'type-bar-value' }, money(cents, cur), h('small', null, ` ${percent(cents / sum)}`)),
+          h('div', { class: 'type-bar-track', 'aria-hidden': 'true' }, h('div', { class: 'type-bar-fill', style: { width: `${(cents / max) * 100}%`, background: `var(--c${category.color})` } })),
+        );
+      }),
+    ),
   );
 }
 
@@ -196,12 +223,15 @@ export function renderCharts() {
     const items = state.expenses
       .filter((e) => e.categoryId === category.id && e.date >= range.start && e.date <= range.end)
       .sort((a, b) => b.date.localeCompare(a.date));
-    detail = h(
+    detail = [
+      typeBreakdown(state, category, range, cur),
+      h(
       'div',
       { class: 'section' },
       h('div', { class: 'section-head' }, h('h2', null, periodLabel(period, current)), h('button', { type: 'button', class: 'link-btn', onclick: () => setView({ categoryId: 'all' }) }, 'All categories')),
       items.length ? h('div', { class: 'card list-card' }, items.map((e) => expenseRow(e, cur))) : h('div', { class: 'card' }, emptyState({ title: `No ${category.name.toLowerCase()} spending in this ${periodWord(period)}` })),
-    );
+      ),
+    ];
   } else {
     detail = breakdown(state, range, cur);
   }

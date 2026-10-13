@@ -11,9 +11,10 @@ import {
   parseApplePayLog,
   parseCSV,
   statementTransactions,
-  suggestCategory,
   withImportKeys,
 } from './importer.js';
+import { classify, learn } from './classify.js';
+import { groupedSelect } from './pickers.js';
 import { fill, h, money, REGION, weekdayDayMonth } from './dom.js';
 import { afterSave, choice, closeSheet, emptyState, fieldRow, openSheet, pickFile, segmented, select, toast } from './ui.js';
 import { icon } from './icons.js';
@@ -189,10 +190,10 @@ export function openImportSheet({ onDone } = {}) {
     }
     const fallback = active.find((c) => c.name.toLowerCase() === 'other') ?? active.at(-1);
     const items = purchases.slice(0, MAX_ROWS).map((t) => {
-      const suggestion = suggestCategory(state, t.merchant);
+      const suggestion = classify(state, t.merchant);
       const duplicate = imported.has(t.key);
       const inLoggedWeek = loggedWeeks.has(weekEndFor(t.date));
-      return { ...t, mkey: merchantKey(t.merchant), categoryId: suggestion?.categoryId ?? fallback.id, guessed: !suggestion, duplicate, inLoggedWeek, include: !duplicate && !inLoggedWeek, manual: false };
+      return { ...t, mkey: merchantKey(t.merchant), categoryId: suggestion?.categoryId ?? fallback.id, typeId: suggestion?.typeId ?? null, guessed: !suggestion, duplicate, inLoggedWeek, include: !duplicate && !inLoggedWeek, manual: false };
     });
 
     const summary = h('p', { class: 'review-summary' });
@@ -219,25 +220,28 @@ export function openImportSheet({ onDone } = {}) {
         },
       });
       item.guessTag = item.guessed ? h('span', { class: 'tag tag-warn' }, 'Check category') : null;
-      item.select = select({
-        label: `Category for ${item.merchant}`,
-        className: 'select select-pill select-sm',
-        value: item.categoryId,
-        options: active.map((c) => ({ value: c.id, label: `${c.emoji} ${c.name}` })),
-        onchange: (e) => {
-          item.categoryId = e.target.value;
-          item.manual = true;
-          item.guessTag?.remove();
-          // Other purchases from the same shop follow, unless changed by hand.
-          for (const other of items) {
-            if (other !== item && other.mkey === item.mkey && !other.manual) {
-              other.categoryId = item.categoryId;
-              other.select.value = item.categoryId;
-              other.guessTag?.remove();
+      const makeSelect = () =>
+        groupedSelect({
+          categoryId: item.categoryId,
+          typeId: item.typeId,
+          label: `Category for ${item.merchant}`,
+          onChange: (pick) => {
+            Object.assign(item, pick, { manual: true });
+            item.guessTag?.remove();
+            // Other purchases from the same shop follow, unless changed by hand.
+            for (const other of items) {
+              if (other !== item && other.mkey === item.mkey && !other.manual) {
+                Object.assign(other, pick);
+                other.guessTag?.remove();
+                const fresh = other.makeSelect();
+                other.select.replaceWith(fresh);
+                other.select = fresh;
+              }
             }
-          }
-        },
-      });
+          },
+        });
+      item.makeSelect = makeSelect;
+      item.select = makeSelect();
       return h(
         'div',
         { class: 'review-row' },
@@ -294,22 +298,11 @@ export function openImportSheet({ onDone } = {}) {
       const now = new Date().toISOString();
       store.update((s) => {
         for (const t of chosen) {
-          s.expenses.push({ id: newId(), categoryId: t.categoryId, amountCents: t.amountCents, date: t.date, note: t.merchant, merchant: t.merchant, source: 'import', importKey: t.key, createdAt: now });
+          s.expenses.push({ id: newId(), categoryId: t.categoryId, amountCents: t.amountCents, date: t.date, note: t.merchant, merchant: t.merchant, source: 'import', importKey: t.key, createdAt: now, ...(t.typeId ? { typeId: t.typeId } : {}) });
         }
         if (!remember.checked) return;
-        for (const t of chosen) {
-          if (t.mkey.length < 3) continue;
-          // Only remember what the built-in shop list wouldn't have guessed anyway.
-          const builtIn = suggestCategory({ ...s, rules: [] }, t.merchant)?.categoryId;
-          const rule = s.rules.find((r) => r.pattern === t.mkey);
-          if (t.categoryId === builtIn) {
-            if (rule) s.rules = s.rules.filter((r) => r !== rule);
-          } else if (rule) {
-            rule.categoryId = t.categoryId;
-          } else {
-            s.rules.push({ id: newId(), pattern: t.mkey, categoryId: t.categoryId });
-          }
-        }
+        // Only shops you sorted by hand are remembered; learn() skips what the dictionary already knows.
+        for (const t of chosen) if (t.manual) learn(s, t.merchant, t.categoryId, t.typeId);
       });
       finished = true;
       closeSheet();
@@ -339,6 +332,21 @@ export function openApplePaySetup({ back } = {}) {
     'div',
     { class: 'stack' },
     h('p', { class: 'sheet-lead' }, 'Your iPhone can write every Apple Pay purchase to a file. Set it up once in the Shortcuts app, then import that file in your Friday check-in.'),
+    h(
+      'div',
+      { class: 'note note-warn' },
+      icon('warn', 18),
+      h(
+        'span',
+        null,
+        h('strong', null, 'No “Transaction” option? '),
+        'It needs iOS 17 or later and a card added to Apple Wallet, and Apple doesn’t offer it on every iPhone or in every country. You don’t need it: tap + and use ',
+        h('strong', null, 'Paste'),
+        ' for bank text messages or ',
+        h('strong', null, 'Scan'),
+        ' for receipts and your bank app.',
+      ),
+    ),
     h(
       'ol',
       { class: 'setup-steps' },

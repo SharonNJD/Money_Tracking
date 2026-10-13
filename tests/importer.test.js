@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaultState } from '../js/logic.js';
 import {
   analyzeStatement,
   cleanMerchant,
@@ -15,7 +14,6 @@ import {
   parseDate,
   parseSignedAmount,
   statementTransactions,
-  suggestCategory,
   withImportKeys,
 } from '../js/importer.js';
 
@@ -129,20 +127,6 @@ test('merchant keys and display names', () => {
   assert.equal(cleanMerchant('  STARBUCKS   STORE 5 '), 'Starbucks Store 5');
   assert.equal(cleanMerchant('Blue Bottle'), 'Blue Bottle');
   assert.equal(cleanMerchant(''), 'Unknown');
-});
-
-test('suggestCategory: remembered shops beat keywords; whole-word short keywords', () => {
-  const s = defaultState();
-  const byName = (n) => s.categories.find((c) => c.name === n).id;
-  assert.deepEqual(suggestCategory(s, 'STARBUCKS #12'), { categoryId: byName('Eating out'), from: 'keyword' });
-  assert.deepEqual(suggestCategory(s, 'Shell Station 4'), { categoryId: byName('Transport'), from: 'keyword' });
-  assert.equal(suggestCategory(s, 'BPM Records'), null);
-  assert.deepEqual(suggestCategory(s, 'שופרסל דיל'), { categoryId: byName('Groceries'), from: 'keyword' });
-  s.rules = [{ id: 'r', pattern: 'starbucks', categoryId: byName('Fun') }];
-  assert.deepEqual(suggestCategory(s, 'STARBUCKS #12'), { categoryId: byName('Fun'), from: 'rule' });
-  // Rules pointing at hidden categories are ignored.
-  s.categories.find((c) => c.name === 'Fun').archived = true;
-  assert.equal(suggestCategory(s, 'STARBUCKS #12').from, 'keyword');
 });
 
 test('import keys tell identical same-day purchases apart', () => {

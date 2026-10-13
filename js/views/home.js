@@ -7,6 +7,8 @@ import { h, isIOS, isStandalone, money, monthName, percent, perPeriod, weekRange
 import { budgetBadge, budgetMessage, categoryDot, emptyState, levelIcon, meter } from '../ui.js';
 import { openCategorySheet, openCheckinSheet, openExpenseSheet, openReminderSheet, openTotalBudgetSheet } from '../sheets.js';
 import { navigate } from '../router.js';
+import { openAddSheet } from '../add-sheet.js';
+import { findType } from '../pickers.js';
 import { icon } from '../icons.js';
 import { topbar } from './common.js';
 
@@ -149,14 +151,34 @@ function budgetsSection(statuses, cur) {
   );
 }
 
+// Title is what it was ("Blue Bottle"), then the type ("☕ Coffee") or category underneath.
 export function expenseRow(e, cur, { showDate = true } = {}) {
   const category = store.category(e.categoryId);
+  const type = findType(category, e.typeId);
+  const kind = type?.name ?? category?.name ?? 'Unknown';
+  const note = e.note ? e.note[0].toUpperCase() + e.note.slice(1) : '';
+  const title = note || kind;
+  const sub = [
+    note && note.toLowerCase() !== kind.toLowerCase() ? kind : type ? category.name : null,
+    !note && e.source !== 'single' ? SOURCE_LABELS[e.source] : null,
+    showDate ? weekdayDayMonth(e.date) : null,
+  ].filter(Boolean);
   return h(
     'button',
     { type: 'button', class: 'expense-row', onclick: () => openExpenseSheet({ expense: e }) },
-    category ? categoryDot(category) : h('span', { class: 'cat-dot' }, '❔'),
-    h('span', { class: 'expense-main' }, h('span', { class: 'expense-name' }, category?.name ?? 'Unknown'), h('small', null, [e.note || (e.source !== 'single' ? SOURCE_LABELS[e.source] : ''), showDate ? weekdayDayMonth(e.date) : ''].filter(Boolean).join(' · '))),
+    category ? categoryDot({ ...category, emoji: type?.emoji ?? category.emoji }) : h('span', { class: 'cat-dot' }, '❔'),
+    h('span', { class: 'expense-main' }, h('span', { class: 'expense-name' }, title), h('small', null, sub.join(' · '))),
     h('span', { class: 'expense-amount' }, money(e.amountCents, cur)),
+  );
+}
+
+function quickAddBar() {
+  return h(
+    'button',
+    { type: 'button', class: 'quick-add', onclick: () => openAddSheet() },
+    h('span', { class: 'quick-add-icon' }, icon('plus', 18)),
+    h('span', { class: 'quick-add-text' }, 'Add spending'),
+    h('span', { class: 'quick-add-hint' }, 'e.g. coffee 18'),
   );
 }
 
@@ -204,6 +226,6 @@ export function renderHome() {
         total && total.period === 'month' ? ` of ${money(total.budgetCents, cur)}` : null,
       ),
     ),
-    h('div', { class: 'content' }, installBanner(), checkinCard(state, today), alertsSection(statuses, cur), insightsCard(state, today, cur), budgetsSection(statuses, cur), goalsSection(), recentSection(state, cur)),
+    h('div', { class: 'content' }, quickAddBar(), installBanner(), checkinCard(state, today), alertsSection(statuses, cur), insightsCard(state, today, cur), budgetsSection(statuses, cur), goalsSection(), recentSection(state, cur)),
   ];
 }
