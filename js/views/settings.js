@@ -1,9 +1,11 @@
 import * as store from '../store.js';
 import { defaultState, normalizeState, todayISO, toCSV } from '../logic.js';
 import { currencyOptions, h, money, perPeriod, weekdayDayMonth } from '../dom.js';
-import { pickFile, select, shareFile, toast } from '../ui.js';
-import { categoryDot, fmtTime, openCategorySheet, openReminderSheet, openTotalBudgetSheet } from '../sheets.js';
+import { categoryDot, pickFile, select, shareFile, toast } from '../ui.js';
+import { fmtTime, openCategorySheet, openReminderSheet, openTotalBudgetSheet } from '../sheets.js';
 import { icon } from '../icons.js';
+import { openApplePaySetup, openImportSheet, openRulesSheet } from '../import-sheet.js';
+import { openRecurringList } from '../recurring-sheet.js';
 import { topbar } from './common.js';
 
 const WARN_LEVELS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95];
@@ -114,6 +116,16 @@ export function renderSettings() {
         'Reminder',
         [row({ title: 'Friday reminder', detail: state.settings.reminderAdded ? fmtTime(state.settings.reminderTime) : 'Not set', onclick: openReminderSheet, leading: h('span', { class: 'row-icon' }, icon('bell', 18)) })],
         'Adds a repeating event to your iPhone Calendar so you get an alert every Friday.',
+      ),
+      group(
+        'Automatic',
+        [
+          row({ title: 'Import purchases', onclick: () => openImportSheet(), leading: h('span', { class: 'row-icon' }, icon('upload', 18)) }),
+          row({ title: 'Log Apple Pay purchases', onclick: () => openApplePaySetup(), leading: h('span', { class: 'row-icon' }, icon('wallet', 18)) }),
+          row({ title: 'Recurring payments', detail: state.recurring.length ? String(state.recurring.filter((r) => r.active).length) : 'None', onclick: openRecurringList, leading: h('span', { class: 'row-icon' }, icon('calendar', 18)) }),
+          row({ title: 'Shop categories', detail: state.rules.length ? String(state.rules.length) : 'None', onclick: openRulesSheet, leading: h('span', { class: 'row-icon' }, icon('history', 18)) }),
+        ],
+        'Bring in Apple Pay or bank purchases, and have bills and subscriptions added for you.',
       ),
       group(
         'Categories & budgets',

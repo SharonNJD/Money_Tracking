@@ -1,8 +1,11 @@
 import * as store from '../store.js';
-import { budgetStatuses, LEVEL_RANK, pendingCheckins, periodRange, sumExpenses, todayISO, weekEndFor } from '../logic.js';
-import { h, isIOS, isStandalone, money, monthName, perPeriod, weekRange, weekdayDayMonth } from '../dom.js';
-import { budgetBadge, budgetMessage, emptyState, levelIcon, meter } from '../ui.js';
-import { categoryDot, openCategorySheet, openCheckinSheet, openExpenseSheet, openReminderSheet, openTotalBudgetSheet } from '../sheets.js';
+import { budgetStatuses, checkinStreak, dueWeekEnd, LEVEL_RANK, pendingCheckins, periodRange, SOURCE_LABELS, sumExpenses, todayISO, weekEndFor } from '../logic.js';
+import { biggestChange, monthForecast } from '../insights.js';
+import { goalsSection } from '../goals.js';
+import { streakText } from '../recap.js';
+import { h, isIOS, isStandalone, money, monthName, percent, perPeriod, weekRange, weekdayDayMonth } from '../dom.js';
+import { budgetBadge, budgetMessage, categoryDot, emptyState, levelIcon, meter } from '../ui.js';
+import { openCategorySheet, openCheckinSheet, openExpenseSheet, openReminderSheet, openTotalBudgetSheet } from '../sheets.js';
 import { navigate } from '../router.js';
 import { icon } from '../icons.js';
 import { topbar } from './common.js';
@@ -27,6 +30,7 @@ function installBanner() {
 
 function checkinCard(state, today) {
   const pending = pendingCheckins(state, today);
+  const streak = checkinStreak(state, today);
   if (pending.length) {
     const isToday = pending[0] === today;
     const more = pending.length - 1;
@@ -39,6 +43,7 @@ function checkinCard(state, today) {
         { class: 'checkin-card-text' },
         h('strong', null, isToday ? 'It’s Friday — time to check in' : 'A week is waiting to be logged'),
         h('span', null, isToday ? `Log what you spent this week (${weekRange(pending[0])}).` : `Week of ${weekRange(pending[0])}${more ? ` · +${more} earlier` : ''}`),
+        streak >= 2 ? h('span', { class: 'streak' }, `🔥 Keep your ${streak}-week streak going`) : null,
       ),
       h('button', { type: 'button', class: 'btn btn-primary', onclick: () => openCheckinSheet(pending[0]) }, isToday ? 'Log week' : 'Log it'),
     );
@@ -54,11 +59,41 @@ function checkinCard(state, today) {
       { class: 'checkin-card-text' },
       h('strong', null, nextFriday ? `Next check-in: ${weekdayDayMonth(nextFriday)}` : 'Week logged — nice!'),
       h('span', null, state.settings.reminderAdded ? 'Your Friday reminder is on.' : 'Get a Friday alert.'),
+      streak >= 2 ? h('span', { class: 'streak' }, streakText(streak)) : null,
     ),
     state.settings.reminderAdded
       ? h('button', { type: 'button', class: 'btn btn-quiet', onclick: () => openCheckinSheet(weekEndFor(today)) }, 'Log now')
       : h('button', { type: 'button', class: 'btn btn-quiet', onclick: openReminderSheet }, icon('bell', 16), 'Remind me'),
   );
+}
+
+function insight(iconName, title, text, warn = false) {
+  return h('div', { class: ['insight', warn && 'is-warn'] }, h('span', { class: 'insight-icon' }, icon(iconName, 18)), h('div', { class: 'insight-text' }, h('strong', null, title), h('span', null, text)));
+}
+
+function insightsCard(state, today, cur) {
+  const rows = [];
+  const forecast = monthForecast(state, today);
+  if (forecast) {
+    const over = forecast.overByCents > 0;
+    let text = `${money(forecast.spentCents, cur)} spent so far`;
+    if (forecast.budgetCents != null) {
+      text = over ? `That’s ${money(forecast.overByCents, cur)} over your ${money(forecast.budgetCents, cur)} budget` : `${money(-forecast.overByCents, cur)} under your ${money(forecast.budgetCents, cur)} budget`;
+    }
+    rows.push(insight(over ? 'warn' : 'chart', `On pace for about ${money(forecast.forecastCents, cur)} in ${monthName(today)}`, text, over));
+  }
+  // Compare the latest logged week with the four before it.
+  const week = dueWeekEnd(today);
+  const change = state.checkins[week] ? biggestChange(state, week) : null;
+  const c = change && store.category(change.categoryId);
+  if (c) {
+    const when = week === weekEndFor(today) ? 'this week' : 'last week';
+    const up = change.diffCents > 0;
+    const title = change.ratio == null ? `${c.emoji} ${c.name}: ${money(change.nowCents, cur)} ${when}` : `${c.emoji} ${c.name} ${up ? 'up' : 'down'} ${percent(Math.abs(change.ratio))} ${when}`;
+    rows.push(insight(up ? 'trendUp' : 'trendDown', title, `${money(change.nowCents, cur)} vs about ${money(change.avgCents, cur)} in a usual week`));
+  }
+  if (!rows.length) return null;
+  return h('section', { class: 'section' }, h('div', { class: 'section-head' }, h('h2', null, 'Insights')), h('div', { class: 'card list-card' }, rows));
 }
 
 function alertsSection(statuses, cur) {
@@ -120,7 +155,7 @@ export function expenseRow(e, cur, { showDate = true } = {}) {
     'button',
     { type: 'button', class: 'expense-row', onclick: () => openExpenseSheet({ expense: e }) },
     category ? categoryDot(category) : h('span', { class: 'cat-dot' }, '❔'),
-    h('span', { class: 'expense-main' }, h('span', { class: 'expense-name' }, category?.name ?? 'Unknown'), h('small', null, [e.note || (e.source === 'checkin' ? 'Weekly check-in' : ''), showDate ? weekdayDayMonth(e.date) : ''].filter(Boolean).join(' · '))),
+    h('span', { class: 'expense-main' }, h('span', { class: 'expense-name' }, category?.name ?? 'Unknown'), h('small', null, [e.note || (e.source !== 'single' ? SOURCE_LABELS[e.source] : ''), showDate ? weekdayDayMonth(e.date) : ''].filter(Boolean).join(' · '))),
     h('span', { class: 'expense-amount' }, money(e.amountCents, cur)),
   );
 }
@@ -169,6 +204,6 @@ export function renderHome() {
         total && total.period === 'month' ? ` of ${money(total.budgetCents, cur)}` : null,
       ),
     ),
-    h('div', { class: 'content' }, installBanner(), checkinCard(state, today), alertsSection(statuses, cur), budgetsSection(statuses, cur), recentSection(state, cur)),
+    h('div', { class: 'content' }, installBanner(), checkinCard(state, today), alertsSection(statuses, cur), insightsCard(state, today, cur), budgetsSection(statuses, cur), goalsSection(), recentSection(state, cur)),
   ];
 }

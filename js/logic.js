@@ -6,6 +6,8 @@ export const PERIODS = ['week', 'month'];
 export const LEVEL_RANK = { ok: 0, warn: 1, over: 2 };
 export const PALETTE_SIZE = 8;
 export const DEFAULT_WARN_AT = 0.8;
+export const SOURCES = ['checkin', 'single', 'import', 'recurring'];
+export const SOURCE_LABELS = { checkin: 'Weekly check-in', single: 'Expense', import: 'Imported', recurring: 'Recurring' };
 
 export const DEFAULT_CATEGORIES = [
   { emoji: '🛒', name: 'Groceries', color: 0 },
@@ -46,6 +48,11 @@ export function todayISO(now = new Date()) {
 
 export function isISODate(value) {
   return typeof value === 'string' && ISO_DATE.test(value) && toISODate(parseISODate(value)) === value;
+}
+
+// Whole days from `fromIso` to `toIso` (negative if `toIso` is earlier).
+export function daysBetween(fromIso, toIso) {
+  return Math.round((parseISODate(toIso) - parseISODate(fromIso)) / 86_400_000);
 }
 
 export function addDays(iso, days) {
@@ -247,6 +254,103 @@ export function checkinDate(weekEnd, todayIso) {
   return weekEnd > todayIso ? todayIso : weekEnd;
 }
 
+// Consecutive logged weeks. The latest week doesn't break the streak until the next Friday passes.
+export function checkinStreak(state, todayIso) {
+  let we = dueWeekEnd(todayIso);
+  if (!state.checkins[we]) we = addDays(we, -7);
+  let streak = 0;
+  while (state.checkins[we]) {
+    streak += 1;
+    we = addDays(we, -7);
+  }
+  return streak;
+}
+
+// ---------------------------------------------------------------------------
+// Recurring payments
+
+export const FREQUENCIES = ['month', 'week'];
+const MAX_CATCH_UP = 60;
+
+// Dates in [fromIso, toIso] when a recurring payment falls. Monthly days past the month's end use its last day.
+export function occurrencesBetween(item, fromIso, toIso) {
+  const dates = [];
+  if (fromIso > toIso) return dates;
+  if (item.frequency === 'week') {
+    let d = addDays(fromIso, (item.day - parseISODate(fromIso).getDay() + 7) % 7);
+    for (; d <= toIso; d = addDays(d, 7)) dates.push(d);
+    return dates;
+  }
+  for (let month = monthStartFor(fromIso); month <= toIso; month = shiftPeriod('month', month, 1)) {
+    const last = monthEndFor(month);
+    const day = Math.min(item.day, Number(last.slice(8)));
+    const d = `${month.slice(0, 8)}${String(day).padStart(2, '0')}`;
+    if (d >= fromIso && d <= toIso) dates.push(d);
+  }
+  return dates;
+}
+
+export function nextOccurrence(item, todayIso) {
+  let from = todayIso > item.startDate ? todayIso : item.startDate;
+  if (item.lastAdded && item.lastAdded >= from) from = addDays(item.lastAdded, 1);
+  return occurrencesBetween(item, from, addDays(from, 62))[0] ?? null;
+}
+
+// Payments that have fallen due and haven't been added yet.
+export function dueRecurring(state, todayIso) {
+  const due = [];
+  for (const item of state.recurring) {
+    if (!item.active) continue;
+    const from = item.lastAdded ? addDays(item.lastAdded, 1) : item.startDate;
+    const dates = occurrencesBetween(item, from, todayIso).slice(-MAX_CATCH_UP);
+    for (const date of dates) due.push({ item, date });
+  }
+  return due;
+}
+
+// Adds due recurring payments to `state` (mutates). Returns what was added.
+export function applyRecurring(state, todayIso, now = new Date().toISOString()) {
+  const due = dueRecurring(state, todayIso);
+  for (const { item, date } of due) {
+    state.expenses.push({
+      id: newId(),
+      categoryId: item.categoryId,
+      amountCents: item.amountCents,
+      date,
+      note: item.name,
+      source: 'recurring',
+      recurringId: item.id,
+      createdAt: now,
+    });
+    if (!item.lastAdded || date > item.lastAdded) item.lastAdded = date;
+  }
+  return due;
+}
+
+// ---------------------------------------------------------------------------
+// Savings goals
+
+export function goalProgress(goal, todayIso) {
+  const savedCents = goal.deposits.reduce((sum, d) => sum + d.cents, 0);
+  const remainingCents = Math.max(0, goal.targetCents - savedCents);
+  const reached = savedCents >= goal.targetCents;
+  let perWeekCents = null;
+  let weeksLeft = null;
+  if (goal.deadline && !reached && goal.deadline >= todayIso) {
+    weeksLeft = Math.max(1, Math.ceil((daysBetween(todayIso, goal.deadline) + 1) / 7));
+    perWeekCents = Math.ceil(remainingCents / weeksLeft / 100) * 100;
+  }
+  return {
+    savedCents,
+    remainingCents,
+    ratio: goal.targetCents > 0 ? Math.max(0, savedCents) / goal.targetCents : 0,
+    reached,
+    overdue: Boolean(goal.deadline && !reached && goal.deadline < todayIso),
+    weeksLeft,
+    perWeekCents,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // State, import & export
 
@@ -266,6 +370,9 @@ export function defaultState({ today = todayISO(), currency = 'USD' } = {}) {
     categories: DEFAULT_CATEGORIES.map((c) => ({ id: newId(), ...c, budget: null, archived: false })),
     expenses: [],
     checkins: {},
+    rules: [],
+    recurring: [],
+    goals: [],
   };
 }
 
@@ -308,6 +415,7 @@ export function normalizeState(raw) {
   });
 
   const categoryIds = new Set(categories.map((c) => c.id));
+  const text = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
   const expenses = raw.expenses.map((e, i) => {
     const valid =
       isObject(e) &&
@@ -321,11 +429,57 @@ export function normalizeState(raw) {
       categoryId: e.categoryId,
       amountCents: e.amountCents,
       date: e.date,
-      note: typeof e.note === 'string' ? e.note.slice(0, 200) : '',
-      source: e.source === 'checkin' ? 'checkin' : 'single',
+      note: text(e.note, 200),
+      source: SOURCES.includes(e.source) ? e.source : 'single',
       createdAt: typeof e.createdAt === 'string' ? e.createdAt : new Date().toISOString(),
+      ...(e.merchant ? { merchant: text(e.merchant, 120) } : {}),
+      ...(e.importKey ? { importKey: text(e.importKey, 300) } : {}),
+      ...(e.recurringId ? { recurringId: text(e.recurringId, 80) } : {}),
     };
   });
+
+  // Optional collections: invalid items are dropped rather than failing the whole backup.
+  const list = (v) => (Array.isArray(v) ? v.filter(isObject) : []);
+  const rules = list(raw.rules)
+    .filter((r) => typeof r.pattern === 'string' && r.pattern.trim().length >= 2 && categoryIds.has(r.categoryId))
+    .map((r) => ({ id: typeof r.id === 'string' && r.id ? r.id : newId(), pattern: r.pattern.trim().toLowerCase().slice(0, 80), categoryId: r.categoryId }));
+
+  const recurring = list(raw.recurring)
+    .filter(
+      (r) =>
+        categoryIds.has(r.categoryId) &&
+        Number.isSafeInteger(r.amountCents) &&
+        r.amountCents > 0 &&
+        FREQUENCIES.includes(r.frequency) &&
+        Number.isInteger(r.day) &&
+        (r.frequency === 'week' ? r.day >= 0 && r.day <= 6 : r.day >= 1 && r.day <= 31) &&
+        isISODate(r.startDate),
+    )
+    .map((r) => ({
+      id: typeof r.id === 'string' && r.id ? r.id : newId(),
+      name: text(r.name, 40).trim() || 'Payment',
+      categoryId: r.categoryId,
+      amountCents: r.amountCents,
+      frequency: r.frequency,
+      day: r.day,
+      startDate: r.startDate,
+      lastAdded: isISODate(r.lastAdded) ? r.lastAdded : null,
+      active: r.active !== false,
+    }));
+
+  const goals = list(raw.goals)
+    .filter((g) => Number.isSafeInteger(g.targetCents) && g.targetCents > 0)
+    .map((g) => ({
+      id: typeof g.id === 'string' && g.id ? g.id : newId(),
+      name: text(g.name, 40).trim() || 'Goal',
+      emoji: typeof g.emoji === 'string' && g.emoji.trim() ? g.emoji.trim().slice(0, 16) : '🎯',
+      targetCents: g.targetCents,
+      deadline: isISODate(g.deadline) ? g.deadline : null,
+      deposits: list(g.deposits)
+        .filter((d) => Number.isSafeInteger(d.cents) && d.cents !== 0 && isISODate(d.date))
+        .map((d) => ({ id: typeof d.id === 'string' && d.id ? d.id : newId(), date: d.date, cents: d.cents })),
+      createdAt: isISODate(g.createdAt) ? g.createdAt : base.createdAt,
+    }));
 
   const checkins = {};
   if (isObject(raw.checkins)) {
@@ -334,7 +488,7 @@ export function normalizeState(raw) {
     }
   }
 
-  return { version: 1, createdAt: base.createdAt, settings, categories, expenses, checkins };
+  return { version: 1, createdAt: base.createdAt, settings, categories, expenses, checkins, rules, recurring, goals };
 }
 
 function csvCell(value) {
@@ -354,8 +508,8 @@ export function toCSV(state) {
       categories.get(e.categoryId)?.name ?? 'Unknown',
       (e.amountCents / 100).toFixed(2),
       state.settings.currency,
-      e.note ?? '',
-      e.source === 'checkin' ? 'Weekly check-in' : 'Expense',
+      e.note || e.merchant || '',
+      SOURCE_LABELS[e.source] ?? 'Expense',
     ]);
   }
   return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');

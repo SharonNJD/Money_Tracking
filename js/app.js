@@ -3,6 +3,7 @@ import { guessCurrency, h } from './dom.js';
 import { icon } from './icons.js';
 import { currentRoute, navigate } from './router.js';
 import { openAddChooser, openOnboarding } from './sheets.js';
+import { runRecurring } from './recurring-sheet.js';
 import { toast } from './ui.js';
 import { renderHome } from './views/home.js';
 import { renderHistory } from './views/history.js';
@@ -56,7 +57,8 @@ window.addEventListener('hashchange', render);
 
 // Dates drive the check-in card, so refresh when the app comes back to the foreground.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') render();
+  if (document.visibilityState !== 'visible') return;
+  if (!runRecurring()) render();
 });
 let resizeTimer;
 window.addEventListener('resize', () => {
@@ -68,6 +70,7 @@ window.addEventListener('resize', () => {
 
 render();
 if (!store.get().settings.onboarded) openOnboarding();
+else runRecurring();
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
   navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Offline support unavailable:', err));

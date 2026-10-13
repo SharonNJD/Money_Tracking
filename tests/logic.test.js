@@ -2,15 +2,21 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   addDays,
+  applyRecurring,
   budgetLevel,
   budgetStatuses,
   checkinDate,
+  checkinStreak,
+  daysBetween,
   defaultState,
   dueWeekEnd,
   escalations,
+  goalProgress,
   isISODate,
   monthEndFor,
+  nextOccurrence,
   normalizeState,
+  occurrencesBetween,
   parseAmount,
   pendingCheckins,
   periodRange,
@@ -185,4 +191,81 @@ test('CSV export quotes text and neutralises formulas', () => {
   assert.equal(lines[0], 'Date,Category,Amount,Currency,Note,Type');
   assert.equal(lines[1], `2026-10-10,Eating out,0.99,USD,"'=HYPERLINK(""x"")",Weekly check-in`);
   assert.equal(lines[2], `${FRI},Groceries,12.50,USD,"milk, eggs",Expense`);
+});
+
+test('daysBetween counts calendar days', () => {
+  assert.equal(daysBetween('2026-10-13', FRI), 3);
+  assert.equal(daysBetween(FRI, '2026-10-13'), -3);
+  assert.equal(daysBetween('2026-03-01', '2026-04-01'), 31);
+});
+
+test('check-in streak counts consecutive logged weeks with a grace week', () => {
+  const s = stateWith();
+  s.checkins = { '2026-09-25': 'x', '2026-10-02': 'x', '2026-10-09': 'x' };
+  assert.equal(checkinStreak(s, '2026-10-13'), 3); // week ending 9 Oct is the latest due
+  assert.equal(checkinStreak(s, FRI), 3); // today's check-in not done yet: still 3
+  assert.equal(checkinStreak(s, '2026-10-20'), 3); // 16 Oct missed but 23 Oct not due yet
+  assert.equal(checkinStreak(s, '2026-10-24'), 0); // two Fridays missed
+  s.checkins[FRI] = 'x';
+  assert.equal(checkinStreak(s, FRI), 4);
+  delete s.checkins['2026-10-02'];
+  assert.equal(checkinStreak(s, FRI), 2);
+});
+
+test('recurring payments: monthly clamps to month end, weekly on a weekday', () => {
+  const rent = { frequency: 'month', day: 31 };
+  assert.deepEqual(occurrencesBetween(rent, '2026-01-15', '2026-04-30'), ['2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30']);
+  const gym = { frequency: 'week', day: 1 }; // Mondays
+  assert.deepEqual(occurrencesBetween(gym, '2026-10-01', '2026-10-20'), ['2026-10-05', '2026-10-12', '2026-10-19']);
+  assert.deepEqual(occurrencesBetween(gym, '2026-10-20', '2026-10-01'), []);
+});
+
+test('applyRecurring adds each due payment once, from the start date on', () => {
+  const s = stateWith();
+  s.recurring = [
+    { id: 'r1', name: 'Netflix', categoryId: 'out', amountCents: 4990, frequency: 'month', day: 5, startDate: '2026-08-10', lastAdded: null, active: true },
+    { id: 'r2', name: 'Paused', categoryId: 'out', amountCents: 100, frequency: 'month', day: 1, startDate: '2026-01-01', lastAdded: null, active: false },
+  ];
+  const added = applyRecurring(s, '2026-10-13', 'now');
+  assert.deepEqual(added.map((a) => a.date), ['2026-09-05', '2026-10-05']); // not Aug 5: before the start date
+  assert.equal(s.recurring[0].lastAdded, '2026-10-05');
+  assert.equal(s.expenses.length, 2);
+  assert.equal(s.expenses[0].source, 'recurring');
+  assert.equal(s.expenses[0].note, 'Netflix');
+  assert.equal(applyRecurring(s, '2026-10-13').length, 0); // idempotent
+  assert.equal(nextOccurrence(s.recurring[0], '2026-10-13'), '2026-11-05');
+  assert.equal(nextOccurrence({ ...s.recurring[0], lastAdded: null, startDate: '2026-10-13' }, '2026-10-13'), '2026-11-05');
+});
+
+test('goal progress: saved, remaining and weekly amount needed', () => {
+  const goal = { targetCents: 500000, deadline: '2026-12-31', deposits: [{ cents: 100000 }, { cents: 50000 }, { cents: -20000 }] };
+  const p = goalProgress(goal, '2026-10-13');
+  assert.equal(p.savedCents, 130000);
+  assert.equal(p.remainingCents, 370000);
+  assert.equal(p.weeksLeft, 12);
+  assert.equal(p.perWeekCents, 30900); // 3083.33 rounded up to whole units
+  assert.ok(!p.reached);
+  assert.ok(goalProgress({ ...goal, deadline: '2026-10-01' }, '2026-10-13').overdue);
+  assert.ok(goalProgress({ ...goal, deposits: [{ cents: 500000 }] }, '2026-10-13').reached);
+});
+
+test('normalizeState keeps valid rules, recurring and goals and drops broken ones', () => {
+  const s = stateWith();
+  s.rules = [{ id: 'a', pattern: 'Starbucks', categoryId: 'out' }, { pattern: 'x', categoryId: 'out' }, { pattern: 'shell', categoryId: 'gone' }];
+  s.recurring = [
+    { id: 'r', name: 'Rent', categoryId: 'food', amountCents: 300000, frequency: 'month', day: 1, startDate: '2026-10-01', lastAdded: null, active: true },
+    { name: 'Bad', categoryId: 'food', amountCents: 5, frequency: 'year', day: 1, startDate: '2026-10-01' },
+  ];
+  s.goals = [{ id: 'g', name: 'Trip', emoji: '✈️', targetCents: 100, deadline: null, deposits: [{ id: 'd', date: FRI, cents: 50 }, { date: 'bad', cents: 1 }], createdAt: FRI }, { targetCents: 0 }];
+  const n = normalizeState(JSON.parse(JSON.stringify(s)));
+  assert.deepEqual(n.rules, [{ id: 'a', pattern: 'starbucks', categoryId: 'out' }]);
+  assert.equal(n.recurring.length, 1);
+  assert.equal(n.goals.length, 1);
+  assert.equal(n.goals[0].deposits.length, 1);
+  // Old backups without these collections still load.
+  const old = JSON.parse(JSON.stringify(s));
+  delete old.rules;
+  delete old.recurring;
+  delete old.goals;
+  assert.deepEqual(normalizeState(old).goals, []);
 });

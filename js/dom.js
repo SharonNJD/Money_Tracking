@@ -41,6 +41,13 @@ export function h(tag, props, ...children) {
   return el;
 }
 
+// Replaces an element's children, skipping null/false like h() does (replaceChildren would print "null").
+export function fill(el, ...children) {
+  el.replaceChildren();
+  appendChildren(el, children);
+  return el;
+}
+
 export function svg(tag, props, ...children) {
   const el = document.createElementNS(SVG_NS, tag);
   appendChildren(el, children);
@@ -154,6 +161,13 @@ export const monthYear = (iso) => fmtDate(iso, { month: 'long', year: 'numeric' 
 export function weekRange(weekEnd) {
   return `${dayMonth(weekStartFor(weekEnd))} – ${dayMonth(weekEnd)}`;
 }
+
+const ordinalRules = new Intl.PluralRules('en', { type: 'ordinal' });
+const ORDINAL_SUFFIX = { one: 'st', two: 'nd', few: 'rd', other: 'th' };
+export const ordinal = (n) => `${n}${ORDINAL_SUFFIX[ordinalRules.select(n)]}`;
+
+// 0 = Sunday … 6 = Saturday. 2026-10-11 was a Sunday.
+export const weekdayName = (day) => fmtDate(`2026-10-${String(11 + day).padStart(2, '0')}`, { weekday: 'long' });
 
 export function periodWord(period) {
   return period === 'week' ? 'week' : 'month';

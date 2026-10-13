@@ -1,4 +1,5 @@
 // Shared UI pieces: bottom sheets, toasts, form controls, budget badges, file export.
+import * as store from './store.js';
 import { currencySymbol, h, money, percent, periodWord } from './dom.js';
 import { icon } from './icons.js';
 
@@ -167,6 +168,17 @@ export function select({ options, value, onchange, label, className = 'select' }
   );
 }
 
+// Big tappable option: icon, title, one-line explanation, chevron.
+export function choice(title, text, iconName, onclick) {
+  return h(
+    'button',
+    { type: 'button', class: 'choice', onclick },
+    h('span', { class: 'choice-icon' }, icon(iconName, 22)),
+    h('span', { class: 'choice-text' }, h('strong', null, title), h('span', null, text)),
+    icon('chevronRight', 18),
+  );
+}
+
 export function emptyState({ title, text, action }) {
   return h('div', { class: 'empty' }, h('p', { class: 'empty-title' }, title), text ? h('p', { class: 'empty-text' }, text) : null, action ?? null);
 }
@@ -213,6 +225,43 @@ export function meter(status) {
     },
     h('div', { class: 'meter-fill', style: { width: `${pct}%` } }),
   );
+}
+
+export function categoryDot(category) {
+  return h('span', { class: 'cat-dot', style: { '--cat': `var(--c${category.color})` }, 'aria-hidden': 'true' }, category.emoji);
+}
+
+export function budgetAlertCards(statuses) {
+  const cur = store.get().settings.currency;
+  return [...statuses]
+    .sort((a, b) => b.ratio - a.ratio)
+    .map((s) =>
+      h(
+        'div',
+        { class: `alert-card level-${s.level}` },
+        h('div', { class: 'alert-head' }, h('span', { class: 'alert-icon' }, levelIcon(s.level, 18)), h('strong', null, `${s.emoji} ${s.label}`)),
+        h('p', { class: 'alert-text' }, budgetMessage(s, cur)),
+        meter(s),
+      ),
+    );
+}
+
+export function openBudgetAlert(statuses, then) {
+  const anyOver = statuses.some((s) => s.level === 'over');
+  const body = h('div', { class: 'stack' }, h('p', { class: 'sheet-lead' }, anyOver ? 'You’ve gone past a budget.' : 'You’re getting close to a budget.'), budgetAlertCards(statuses));
+  openSheet({ title: 'Budget warning', body, primaryLabel: 'Got it', onPrimary: () => true, dismissible: false, onClose: then });
+}
+
+// Runs once the current sheet has finished closing: a budget warning if any budget got worse, else a toast.
+export function afterSave(raised, message, then) {
+  setTimeout(() => {
+    if (raised.length) {
+      openBudgetAlert(raised, then);
+    } else {
+      toast(message);
+      then?.();
+    }
+  }, 280);
 }
 
 // ---------------------------------------------------------------------------

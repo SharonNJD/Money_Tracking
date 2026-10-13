@@ -15,9 +15,17 @@ import {
   weekEndFor,
   weekStartFor,
 } from './logic.js';
-import { centsToInput, currencyOptions, guessCurrency, h, isIOS, isStandalone, LOCALE, money, percent, weekRange, weekdayDayMonth } from './dom.js';
-import { amountInput, budgetMessage, closeSheet, fieldRow, levelIcon, meter, openSheet, segmented, select, toast } from './ui.js';
+import { centsToInput, currencyOptions, fill, guessCurrency, h, isIOS, isStandalone, LOCALE, money, percent, weekRange, weekdayDayMonth } from './dom.js';
+import { afterSave, amountInput, categoryDot, choice, closeSheet, fieldRow, levelIcon, openSheet, segmented, select, toast } from './ui.js';
+import { openImportSheet } from './import-sheet.js';
+import { openRecapSheet } from './recap.js';
 import { icon } from './icons.js';
+
+const SOURCE_HINTS = {
+  checkin: 'Part of a weekly check-in.',
+  import: 'Imported from Apple Pay or a statement.',
+  recurring: 'Added automatically by a recurring payment.',
+};
 
 const PERIOD_OPTIONS = [
   { value: 'week', label: 'Weekly' },
@@ -26,42 +34,6 @@ const PERIOD_OPTIONS = [
 
 function currency() {
   return store.get().settings.currency;
-}
-
-function categoryDot(category) {
-  return h('span', { class: 'cat-dot', style: { '--cat': `var(--c${category.color})` }, 'aria-hidden': 'true' }, category.emoji);
-}
-
-// Runs after the current sheet has finished closing.
-function afterSave(raised, message) {
-  setTimeout(() => {
-    if (raised.length) openBudgetAlert(raised);
-    else toast(message);
-  }, 280);
-}
-
-// ---------------------------------------------------------------------------
-// Budget warning
-
-export function openBudgetAlert(statuses) {
-  const cur = currency();
-  const sorted = [...statuses].sort((a, b) => b.ratio - a.ratio);
-  const anyOver = sorted.some((s) => s.level === 'over');
-  const body = h(
-    'div',
-    { class: 'stack' },
-    h('p', { class: 'sheet-lead' }, anyOver ? 'You’ve gone past a budget.' : 'You’re getting close to a budget.'),
-    sorted.map((s) =>
-      h(
-        'div',
-        { class: `alert-card level-${s.level}` },
-        h('div', { class: 'alert-head' }, h('span', { class: 'alert-icon' }, levelIcon(s.level, 18)), h('strong', null, `${s.emoji} ${s.label}`)),
-        h('p', { class: 'alert-text' }, budgetMessage(s, cur)),
-        meter(s),
-      ),
-    ),
-  );
-  openSheet({ title: 'Budget warning', body, primaryLabel: 'Got it', onPrimary: () => true, dismissible: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +99,7 @@ export function openCheckinSheet(initialWeekEnd) {
       icon('chevronRight', 20),
     );
 
-    container.replaceChildren(
+    fill(container,
       h(
         'div',
         { class: 'week-nav' },
@@ -138,6 +110,19 @@ export function openCheckinSheet(initialWeekEnd) {
       doneAt
         ? h('p', { class: 'note note-good' }, icon('check', 16), 'Already logged. Amounts you add now go on top of what’s there.')
         : h('p', { class: 'sheet-lead' }, 'How much did you spend in each category this week? Leave blank if nothing.'),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'btn btn-quiet btn-block',
+          onclick: () => {
+            if (rows.some((r) => r.input.value.trim()) && !confirm('Import now? The amounts you typed will be cleared.')) return;
+            openImportSheet({ onDone: () => openCheckinSheet(weekEnd) });
+          },
+        },
+        icon('upload', 18),
+        'Import Apple Pay or bank purchases',
+      ),
       h('div', { class: 'card list-card' }, rows.map((r) => r.el)),
       h('div', { class: 'checkin-total' }, h('span', null, 'Week total'), totalEl),
       h('button', { type: 'button', class: 'btn btn-primary btn-block', onclick: save }, 'Save week'),
@@ -169,9 +154,9 @@ export function openCheckinSheet(initialWeekEnd) {
       for (const e of entries) s.expenses.push({ id: newId(), ...e, date, note: '', source: 'checkin', createdAt: now });
       s.checkins[weekEnd] = now;
     });
-    const total = entries.reduce((sum, e) => sum + e.amountCents, 0);
+    const raised = escalations(before, budgetStatuses(store.get(), date));
     closeSheet();
-    afterSave(escalations(before, budgetStatuses(store.get(), date)), entries.length ? `Week saved · ${money(total, currency())}` : 'Week marked as logged');
+    setTimeout(() => openRecapSheet({ weekEnd, raised }), 280);
     return true;
   }
 
@@ -182,7 +167,7 @@ export function openCheckinSheet(initialWeekEnd) {
 // ---------------------------------------------------------------------------
 // Single expense (add or edit)
 
-function categoryPicker(selectedId, onPick, extra) {
+export function categoryPicker(selectedId, onPick, extra) {
   const categories = store.activeCategories();
   if (extra && !categories.includes(extra)) categories.push(extra);
   const buttons = categories.map((c) =>
@@ -243,7 +228,7 @@ export function openExpenseSheet({ expense, categoryId } = {}) {
     field,
     h('div', { class: 'form-section' }, h('span', { class: 'field-label' }, 'Category'), categoryPicker(catId, (id) => (catId = id), editing ? store.category(expense.categoryId) : null)),
     h('div', { class: 'card form-card' }, fieldRow('Date', date), fieldRow('Note', note)),
-    expense?.source === 'checkin' ? h('p', { class: 'field-hint' }, 'Part of a weekly check-in.') : null,
+    expense && expense.source !== 'single' ? h('p', { class: 'field-hint' }, SOURCE_HINTS[expense.source]) : null,
     error,
     remove,
   );
@@ -282,13 +267,12 @@ export function openExpenseSheet({ expense, categoryId } = {}) {
 
 // Chooser behind the big + button.
 export function openAddChooser() {
-  const option = (title, text, iconName, onclick) =>
-    h('button', { type: 'button', class: 'choice', onclick }, h('span', { class: 'choice-icon' }, icon(iconName, 22)), h('span', { class: 'choice-text' }, h('strong', null, title), h('span', null, text)), icon('chevronRight', 18));
   const body = h(
     'div',
     { class: 'stack' },
-    option('Weekly check-in', 'Fill in this week’s spending for every category at once.', 'calendar', () => openCheckinSheet()),
-    option('Single expense', 'Add one purchase with a date and note.', 'wallet', () => openExpenseSheet()),
+    choice('Weekly check-in', 'Fill in this week’s spending for every category at once.', 'calendar', () => openCheckinSheet()),
+    choice('Single expense', 'Add one purchase with a date and note.', 'wallet', () => openExpenseSheet()),
+    choice('Import purchases', 'From Apple Pay or a bank or card statement.', 'upload', () => openImportSheet()),
   );
   openSheet({ title: 'Add spending', body, cancelLabel: 'Close' });
 }
@@ -345,7 +329,7 @@ export function openCategorySheet(category) {
   const budget = budgetFields(category?.budget, cur);
   const error = h('p', { class: 'form-error', role: 'alert' });
 
-  const count = editing ? state.expenses.filter((e) => e.categoryId === category.id).length : 0;
+  const count = editing ? state.expenses.filter((e) => e.categoryId === category.id).length + state.recurring.filter((r) => r.categoryId === category.id).length : 0;
   const remove = editing
     ? h(
         'button',
@@ -363,6 +347,7 @@ export function openCategorySheet(category) {
               if (!confirm(`Delete “${category.name}”?`)) return;
               store.update((s) => {
                 s.categories = s.categories.filter((c) => c.id !== category.id);
+                s.rules = s.rules.filter((r) => r.categoryId !== category.id);
               });
               toast('Category deleted');
             }
@@ -556,4 +541,3 @@ export function openOnboarding() {
   });
 }
 
-export { categoryDot };
