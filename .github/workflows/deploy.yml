@@ -1,0 +1,57 @@
+name: Test and deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+
+  deploy:
+    needs: test
+    # Skipped until GitHub Pages is turned on (Settings → Pages → Source: GitHub Actions).
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || github.event.repository.has_pages)
+    runs-on: ubuntu-latest
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Build site
+        run: |
+          # Point the Friday reminder links at this site's real address.
+          node scripts/gen-reminders.mjs "${{ steps.pages.outputs.base_url }}/"
+          mkdir -p _site
+          cp -r index.html manifest.webmanifest sw.js css js icons reminders _site/
+          # A new service-worker version per commit makes installed apps pick up the update.
+          sed -i "s/const VERSION = 'dev';/const VERSION = '${GITHUB_SHA::8}';/" _site/sw.js
+          grep -q "const VERSION = '${GITHUB_SHA::8}';" _site/sw.js
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

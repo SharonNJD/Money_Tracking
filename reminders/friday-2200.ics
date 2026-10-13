@@ -1,0 +1,23 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Money Tracker//Friday Reminder//EN
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:money-tracker-friday-2200@money-tracker.app
+DTSTAMP:20260101T000000Z
+DTSTART:20260102T220000
+DURATION:PT10M
+RRULE:FREQ=WEEKLY;BYDAY=FR
+SUMMARY:💰 Log this week’s spending
+DESCRIPTION:Open Money Tracker and fill in what you spent this week.\nhttps
+ ://sharonnjd.github.io/Money_Tracking/
+URL:https://sharonnjd.github.io/Money_Tracking/
+TRANSP:TRANSPARENT
+BEGIN:VALARM
+ACTION:DISPLAY
+DESCRIPTION:Log this week’s spending in Money Tracker
+TRIGGER:PT0M
+END:VALARM
+END:VEVENT
+END:VCALENDAR
