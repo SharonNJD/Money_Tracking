@@ -61,6 +61,12 @@ To turn it on:
 - Deleting the Home Screen app also deletes its data, so export a backup now and then (**Settings → Export backup**).
 - If you lose your phone, install the app on the new one and use **Settings → Restore from backup**.
 
+## Privacy & security
+
+- There's no server, account, analytics or tracking. The app never sends your data anywhere, and its Content Security Policy blocks connections to any other site.
+- Making this repository public only shows the app's code. Your spending is stored on your own iPhone, not in GitHub, so nobody who opens the site or the repo can see it. Every visitor gets their own empty app.
+- Imported statement files are read on the phone and shown as plain text, never run as code.
+
 ## Development
 
 ```sh
